@@ -36,6 +36,26 @@ RESULTS_CSV = Path(__file__).parent / "qc_results.csv"
 st.set_page_config(page_title="QC Viewer", layout="wide")
 
 
+def _join_ocr_pages(raw):
+    """ocr.jsonl content (one JSON object per line: page/text) -> a single
+    readable string, pages joined in order. Same format ingest_json.py uses."""
+    if not raw:
+        return None
+    pages = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            o = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        pages.append((o.get("page", 0), o.get("text", "")))
+    pages.sort()
+    parts = [f"— Page {pg} —\n{txt}".strip() for pg, txt in pages if txt]
+    return "\n\n".join(parts) or None
+
+
 # ---------------------------------------------------------------- sources --
 class LocalSource:
     """Records read from a local folder: <root>/<record_id>/*.json + image."""
@@ -56,17 +76,21 @@ class LocalSource:
         jpath = next(folder.glob("*.json"), None)
         data = json.loads(jpath.read_text(encoding="utf-8")) if jpath else {}
 
+        ocr_path = folder / "ocr.jsonl"
+        fulltext = _join_ocr_pages(ocr_path.read_text(encoding="utf-8")) \
+            if ocr_path.exists() else None
+
         img_path = next((p for p in folder.iterdir()
                           if p.suffix.lower() in IMAGE_EXTS), None)
         if img_path:
-            return data, ("image", img_path.read_bytes())
+            return data, ("image", img_path.read_bytes()), fulltext
 
         pdf_path = next((p for p in folder.iterdir()
                           if p.suffix.lower() == ".pdf"), None)
         if pdf_path:
-            return data, ("pdf", pdf_path.read_bytes())
+            return data, ("pdf", pdf_path.read_bytes()), fulltext
 
-        return data, (None, None)
+        return data, (None, None), fulltext
 
 
 class GcsSource:
@@ -78,15 +102,30 @@ class GcsSource:
         from google.cloud import storage
         from google.oauth2 import service_account
 
-        creds_json = os.environ.get("GCS_CREDENTIALS_JSON")
+        creds_json = _config("GCS_CREDENTIALS_JSON")
         if creds_json:
-            info = json.loads(creds_json)
+            try:
+                info = json.loads(creds_json)
+            except json.JSONDecodeError as e:
+                st.error(
+                    "GCS_CREDENTIALS_JSON isn't valid JSON once loaded from "
+                    "secrets. On Streamlit Cloud, paste it inside TOML "
+                    "**single**-quoted triple quotes ('''...'''), not double "
+                    "(\"\"\"...\"\"\") — double-quoted TOML strings turn the `\\n` "
+                    f"inside your private_key into a real newline. ({e})"
+                )
+                st.stop()
             creds = service_account.Credentials.from_service_account_info(info)
             client = storage.Client(credentials=creds, project=info.get("project_id"))
         else:
             client = storage.Client()
-        self.bucket = client.bucket(os.environ["GCS_BUCKET"])
-        self.prefix = os.environ.get("GCS_PREFIX", "").strip("/")
+
+        bucket_name = _config("GCS_BUCKET")
+        if not bucket_name:
+            st.error("GCS_BUCKET is not set (check Settings → Secrets).")
+            st.stop()
+        self.bucket = client.bucket(bucket_name)
+        self.prefix = (_config("GCS_PREFIX") or "").strip("/")
         self.prefix = self.prefix + "/" if self.prefix else ""
 
     def _blob(self, rel_path):
@@ -121,27 +160,39 @@ class GcsSource:
         if jtext:
             data = json.loads(jtext)
 
+        fulltext = _join_ocr_pages(_self._read_text(f"{record_id}/ocr.jsonl"))
+
         for ext in IMAGE_EXTS:
             blob = _self._blob(f"{record_id}/{record_id}{ext}")
             try:
                 if blob.exists():
-                    return data, ("image", blob.download_as_bytes())
+                    return data, ("image", blob.download_as_bytes()), fulltext
             except Exception:
                 pass
 
         pdf_blob = _self._blob(f"{record_id}/{record_id}.pdf")
         try:
             if pdf_blob.exists():
-                return data, ("pdf", pdf_blob.download_as_bytes())
+                return data, ("pdf", pdf_blob.download_as_bytes()), fulltext
         except Exception:
             pass
 
-        return data, (None, None)
+        return data, (None, None), fulltext
+
+
+def _config(key):
+    """Read a setting from Streamlit secrets first, then env vars."""
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.environ.get(key)
 
 
 @st.cache_resource
 def get_source(data_root):
-    if os.environ.get("GCS_BUCKET"):
+    if _config("GCS_BUCKET"):
         return GcsSource()
     return LocalSource(data_root)
 
@@ -184,7 +235,7 @@ def save_result(record_id, status, note):
 def main():
     st.title("QC Viewer")
 
-    using_gcs = bool(os.environ.get("GCS_BUCKET"))
+    using_gcs = bool(_config("GCS_BUCKET"))
     data_root = st.sidebar.text_input("Local data folder", value="data",
                                        disabled=using_gcs)
     source = get_source(data_root)
@@ -239,7 +290,7 @@ def main():
         st.caption(f"{done} reviewed so far")
 
     record_id = ids[st.session_state.idx]
-    data, (kind, raw) = source.load(record_id)
+    data, (kind, raw), fulltext = source.load(record_id)
 
     st.divider()
     left, right = st.columns([1, 1])
@@ -259,19 +310,36 @@ def main():
             st.error("No image or PDF found for this record.")
 
     with right:
-        st.subheader("JSON")
-        search = st.text_input("Filter fields (matches key or value)", key=f"search_{record_id}")
-        if search:
-            fields = data.get("fields") if isinstance(data, dict) else None
-            if isinstance(fields, list):
-                s = search.lower()
-                shown = {**{k: v for k, v in data.items() if k != "fields"},
-                         "fields": [f for f in fields if s in json.dumps(f, ensure_ascii=False).lower()]}
-                st.json(shown, expanded=True)
+        tab_json, tab_text = st.tabs(["JSON", "Full text (OCR)"])
+
+        with tab_json:
+            search = st.text_input("Filter fields (matches key or value)", key=f"search_{record_id}")
+            if search:
+                fields = data.get("fields") if isinstance(data, dict) else None
+                if isinstance(fields, list):
+                    s = search.lower()
+                    shown = {**{k: v for k, v in data.items() if k != "fields"},
+                             "fields": [f for f in fields if s in json.dumps(f, ensure_ascii=False).lower()]}
+                    st.json(shown, expanded=True)
+                else:
+                    st.json(data, expanded=True)
             else:
                 st.json(data, expanded=True)
-        else:
-            st.json(data, expanded=True)
+
+        with tab_text:
+            if fulltext:
+                tsearch = st.text_input("Filter text (matches anywhere on a line)",
+                                         key=f"tsearch_{record_id}")
+                shown_text = fulltext
+                if tsearch:
+                    s = tsearch.lower()
+                    shown_text = "\n".join(
+                        line for line in fulltext.splitlines() if s in line.lower()
+                    ) or "(no matching lines)"
+                st.text_area("OCR text", value=shown_text, height=500,
+                              key=f"text_{record_id}", label_visibility="collapsed")
+            else:
+                st.info("No ocr.jsonl found for this record.")
 
     st.divider()
     prior = results.get(record_id, {})
