@@ -130,7 +130,11 @@ def color_verdict(val):
     return ""
 
 
-styled = show.style.applymap(color_verdict, subset=["P1?", "P2?"])
+styler = show.style
+if hasattr(styler, "map"):
+    styled = styler.map(color_verdict, subset=["P1?", "P2?"])
+else:
+    styled = styler.applymap(color_verdict, subset=["P1?", "P2?"])
 st.dataframe(styled, use_container_width=True, hide_index=True, height=560)
 
 st.caption(
