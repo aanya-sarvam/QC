@@ -157,16 +157,6 @@ if show_readback:
     )
 
 with st.expander("What changed between Prompt 1 and Prompt 2?"):
-    st.markdown(
-        "- **Write-through / conflict fix (self-check rule).** v1 told Gemini to "
-        "*blank the field* whenever its reading disagreed with the IGR metadata. v2 "
-        "splits that into (a) genuine mis-location → re-scan, and (b) correct location "
-        "but conflicting value → keep the value, mark found, lower confidence, and note "
-        "the conflict. Stops correct-but-conflicting readings from being discarded.\n"
-        "- **Address extraction.** v2 adds explicit guidance to read the whole "
-        "multi-line address block (village / PO / PS / district), transcribe partial "
-        "legible text instead of blanking, and match it to the correct party.\n"
-        "- **Plot boundary as a first-class field.** v2 documents `property_boundary` "
-        "(north/south/east/west) as a list field whose values may be names, landmarks, "
-        "plots, or places — so boundary sides get extracted rather than skipped."
-    )
+    st.markdown("""
+**ADDRESS COMPLETION:** The `english_value` for an address is registry metadata and is normally the COMPLETE address (village/AT, PO, PS/Thana, District). Treat it as a checklist. Read the whole block on the page and transcribe every component you can actually see, in the page's own script. If you page-verify at least ONE component (so you are confident you found the right party's address) but one or more later components — typically PS or District — appear in `english_value` yet are NOT written on the page, COMPLETE the address by appending those missing components rendered in Odia; do NOT return only the partial fragment. In `notes` you MUST state which components were read from the page vs supplied from `english_value` (e.g. "AT+PO read from page; PS+Dist supplied from english_value, not in ink"), and lower `confidence` to reflect the fill. Do NOT do this if you could not verify ANY part of the address on the page — then follow the normal not-found rule. An address fabricated entirely from `english_value` with nothing anchored on the page is never allowed.
+""")
