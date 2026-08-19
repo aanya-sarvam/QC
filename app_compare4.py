@@ -10,8 +10,8 @@ For each deed, shows every field across four columns:
 plus a match verdict for Prompt 1 and Prompt 2 against the expert value.
 
 Expects these three files in the same folder (or upload from the sidebar):
-  vertex_10_corrected.json   (DB export: odia_value = expert truth)
-  old_outputs_10.jsonl       (prompt.py output, one JSON per deed)
+  vertex_50_corrected.json   (DB export: odia_value = expert truth)
+  old_outputs_50.jsonl       (prompt.py output, one JSON per deed)
   new_outputs.json           (prompt_v2.py output)
 """
 import os
@@ -84,9 +84,7 @@ m1.metric("Coverage — Prompt 2", f"{c2_cov*100:.1f}%", f"{(c2_cov-c1_cov)*100:
 m2.metric("Match — Prompt 1", f"{c1_rec*100:.1f}%")
 m2.metric("Match — Prompt 2", f"{c2_rec*100:.1f}%", f"{(c2_rec-c1_rec)*100:+.1f} pp")
 fixed = ((df["P1"] == "missing") & (df["P2"].isin({"match", "deed_type"}))).sum()
-broke = ((df["P1"].isin({"match", "deed_type"})) & (df["P2"] == "mismatch")).sum()
 m3.metric("Fields fixed by v2", int(fixed))
-m3.metric("Fields regressed by v2", int(broke))
 st.caption(
     "Coverage = produced a value where the expert had one (the client's "
     "'not found' complaint). Match = value agrees with the expert after "
@@ -102,13 +100,21 @@ choice = st.selectbox("Select deed", options=list(range(len(deeds))),
 deed = deeds[choice]
 ddf = df[df["deed"] == deed].copy()
 
-show = ddf[[
-    "group", "field",
-    "Original IGR (sent to Gemini)",
-    "Prompt 1 (Odia)", "P1",
-    "Expert corrected (Odia)",
-    "Prompt 2 (Odia)", "P2",
-]].rename(columns={"group": "Section", "field": "Field", "P1": "P1?", "P2": "P2?"})
+show_readback = st.checkbox("Show English readback columns", value=False)
+
+cols = ["group", "field", "Original IGR (sent to Gemini)"]
+if show_readback:
+    cols += ["Prompt 1 (Odia)", "Prompt 1 readback (EN)", "P1"]
+    cols += ["Expert corrected (Odia)", "Expert readback (EN, auto)"]
+    cols += ["Prompt 2 (Odia)", "Prompt 2 readback (EN)", "P2"]
+else:
+    cols += ["Prompt 1 (Odia)", "P1", "Expert corrected (Odia)", "Prompt 2 (Odia)", "P2"]
+
+show = ddf[cols].rename(columns={
+    "group": "Section", "field": "Field", "P1": "P1?", "P2": "P2?",
+    "Prompt 1 readback (EN)": "P1 readback", "Prompt 2 readback (EN)": "P2 readback",
+    "Expert readback (EN, auto)": "Expert readback (auto)",
+})
 
 STATUS_EMOJI = {
     "match": "✅ match", "mismatch": "❌ differs", "missing": "⬜ not found",
@@ -142,6 +148,13 @@ st.caption(
     "➕ extra (prompt found something the expert left blank) · ≈ category (deed_type: "
     "English label vs on-page Odia term — expected)."
 )
+if show_readback:
+    st.caption(
+        "P1/P2 readbacks are Gemini's own contextual `latin_readback`. "
+        "**Expert readback is auto-transliterated** (simple rule-based Odia→Latin) "
+        "since the DB stores no English form of the expert's correction — "
+        "treat it as a rough reading aid, not verified ground truth."
+    )
 
 with st.expander("What changed between Prompt 1 and Prompt 2?"):
     st.markdown(
