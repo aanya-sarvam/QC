@@ -42,13 +42,13 @@ def _save_upload(uploaded, suffix):
 with st.sidebar:
     st.header("Data source")
     st.caption("Defaults to bundled files — upload to override.")
-    up_export = st.file_uploader("vertex_10_corrected.json", type="json", key="exp")
-    up_old = st.file_uploader("old_outputs_10.jsonl", type=["jsonl", "json"], key="old")
-    up_new = st.file_uploader("new_outputs.json", type="json", key="new")
+    up_export = st.file_uploader("vertex_50_corrected.json", type="json", key="exp")
+    up_old = st.file_uploader("old_outputs_50.jsonl", type=["jsonl", "json"], key="old")
+    up_new = st.file_uploader("new_outputs_50.json", type="json", key="new")
 
-export_path = _save_upload(up_export, ".json") or "vertex_10_corrected.json"
-old_path = _save_upload(up_old, ".jsonl") or "old_outputs_10.jsonl"
-new_path = _save_upload(up_new, ".json") or "new_outputs.json"
+export_path = _save_upload(up_export, ".json") or "vertex_50_corrected.json"
+old_path = _save_upload(up_old, ".jsonl") or "old_outputs_50.jsonl"
+new_path = _save_upload(up_new, ".json") or "new_outputs_50.json"
 
 for p, name in [(export_path, "export"), (old_path, "old outputs"), (new_path, "new outputs")]:
     if not os.path.exists(p):
