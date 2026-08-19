@@ -1,3 +1,2 @@
-streamlit>=1.35
-pymupdf>=1.24        # only needed if your images are PDFs (renders page 1)
-google-cloud-storage # only needed if reading straight from GCS
+streamlit
+pandas
